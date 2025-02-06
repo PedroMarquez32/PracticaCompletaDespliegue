@@ -1,25 +1,47 @@
 # Usar la imagen oficial de PHP con Apache
-FROM php:8.2-apache
+FROM php:8.2.15-apache
+
+# Configurar variables de entorno para Composer
+ENV COMPOSER_ALLOW_SUPERUSER=1
+ENV COMPOSER_HOME=/composer
+
 # Instalar extensiones necesarias
 RUN apt-get update && apt-get install -y \
-git \
-unzip \
-libicu-dev \
-&& docker-php-ext-install pdo pdo_mysql
+    git \
+    unzip \
+    libicu-dev \
+    && docker-php-ext-install pdo pdo_mysql
+
 # Instalar Composer
-COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+COPY --from=composer:2.6 /usr/bin/composer /usr/bin/composer
+
 WORKDIR /app
-# Copiar archivos del backend al contenedor
+
+# Copiar composer.json y composer.lock primero para aprovechar la caché de capas
+COPY composer.json composer.lock ./
+
+# Instalar dependencias
+RUN composer install --no-scripts --no-autoloader
+
+# Copiar el resto de los archivos
 COPY . .
-# Instalar dependencias con Composer
-RUN composer install
-RUN composer require symfony/orm-pack doctrine/doctrine-bundle
-RUN composer require doctrine/dbal
-# Ejecutar migraciones al construir la imagen
-RUN php bin/console doctrine:migrations:diff || true
-RUN php bin/console doctrine:migrations:migrate --no-interaction || true
-# Establecer permisos para el directorio var
+
+# Instalar paquetes adicionales
+RUN composer require symfony/orm-pack --no-scripts && \
+    composer require doctrine/doctrine-bundle --no-scripts && \
+    composer require doctrine/dbal --no-scripts
+
+# Generar autoloader y ejecutar scripts
+RUN composer dump-autoload --optimize && \
+    composer run-script post-install-cmd
+
+# Ejecutar migraciones
+RUN php bin/console doctrine:migrations:diff || true && \
+    php bin/console doctrine:migrations:migrate --no-interaction || true
+
+# Establecer permisos
 RUN chmod -R 777 /app/var
+
 # Exponer el puerto
 EXPOSE 8000
 CMD ["php", "-S", "0.0.0.0:8000", "-t", "public"]
